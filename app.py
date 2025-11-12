@@ -10,10 +10,6 @@ app = Flask(__name__)
 app.config['UPLOAD_FOLDER'] = 'static/uploads'
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 
-# === Load Models ===
-cow_model = load_model('cow_disease_model.h5')
-poultry_model = load_model('poultry_disease_model.keras')
-
 # === Class Labels ===
 cow_class_names = ['healthycows', 'lumpycows']
 poultry_class_labels = ['Healthy', 'coryza', 'crd', 'Fowlpox', 'Bumblefoot']
@@ -59,6 +55,15 @@ def preprocess_image(img_path, target_size=(224, 224)):
     img_array = image.img_to_array(img) / 255.0
     return np.expand_dims(img_array, axis=0)
 
+# === Lazy Load Model ===
+def get_model(animal_type):
+    if animal_type == "cow":
+        return load_model('cow_disease_model.h5')
+    elif animal_type == "poultry":
+        return load_model('poultry_disease_model.keras')
+    else:
+        return None
+
 # === Flask Routes ===
 @app.route("/", methods=["GET", "POST"])
 def index():
@@ -71,7 +76,7 @@ def index():
 
     if request.method == "POST":
         animal_type = request.form.get("animal_type")
-        file = request.files["image"]
+        file = request.files.get("image")
 
         if file and animal_type:
             filepath = os.path.join(app.config["UPLOAD_FOLDER"], file.filename)
@@ -79,27 +84,31 @@ def index():
             image_url = filepath
 
             img_array = preprocess_image(filepath)
+            model = get_model(animal_type)
 
-            if animal_type == "cow":
-                preds = cow_model.predict(img_array)
-                prediction = preds[0][0]
-                class_index = int(prediction > 0.5)
-                confidence = prediction if class_index == 1 else 1 - prediction
-                predicted_label = cow_class_names[class_index]
-                label = f"{predicted_label} ({confidence*100:.2f}%)"
-                info = cow_disease_info.get(predicted_label, {})
+            if model:
+                if animal_type == "cow":
+                    preds = model.predict(img_array)
+                    prediction = preds[0][0]
+                    class_index = int(prediction > 0.5)
+                    confidence = prediction if class_index == 1 else 1 - prediction
+                    predicted_label = cow_class_names[class_index]
+                    label = f"{predicted_label} ({confidence * 100:.2f}%)"
+                    info = cow_disease_info.get(predicted_label, {})
+
+                elif animal_type == "poultry":
+                    preds = model.predict(img_array)
+                    pred_idx = np.argmax(preds[0])
+                    confidence = np.max(preds[0])
+                    predicted_label = poultry_class_labels[pred_idx]
+                    label = f"{predicted_label} ({confidence * 100:.2f}%)"
+                    info = poultry_disease_info.get(predicted_label, {})
+
                 description = info.get("description", "No info available.")
                 treatment = info.get("treatment", "No treatment information available.")
 
-            elif animal_type == "poultry":
-                preds = poultry_model.predict(img_array)
-                pred_idx = np.argmax(preds[0])
-                confidence = np.max(preds[0])
-                predicted_label = poultry_class_labels[pred_idx]
-                label = f"{predicted_label} ({confidence*100:.2f}%)"
-                info = poultry_disease_info.get(predicted_label, {})
-                description = info.get("description", "No info available.")
-                treatment = info.get("treatment", "No treatment information available.")
+                # Free memory after prediction
+                del model
 
     return render_template("index3.html",
                            label=label,
@@ -110,4 +119,5 @@ def index():
                            treatment=treatment)
 
 if __name__ == "__main__":
-      app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
+    # For Render deployment
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
